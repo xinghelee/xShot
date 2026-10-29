@@ -17,10 +17,10 @@ cp -R build/DerivedData/Build/Products/Release/xShot.app build/xShot.app
 if [[ -n "$IDENTITY" ]]; then
   # Several certificates can share one name, so sign by SHA-1 when available.
   HASH=$(security find-identity -v -p codesigning | grep -F "$IDENTITY" | head -1 | awk '{print $2}')
-  codesign --force --deep --sign "${HASH:-$IDENTITY}" build/xShot.app
+  codesign --force --deep --options runtime --entitlements xShot/xShot.entitlements --sign "${HASH:-$IDENTITY}" build/xShot.app
 else
   echo "warning: XSHOT_SIGN_IDENTITY not set, signing ad-hoc (screen-recording permission resets on every rebuild)" >&2
-  codesign --force --deep --sign - build/xShot.app
+  codesign --force --deep --options runtime --entitlements xShot/xShot.entitlements --sign - build/xShot.app
 fi
 echo "Built build/xShot.app"
 
