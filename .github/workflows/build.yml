@@ -1,0 +1,92 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    env:
+      # Optional: with these secrets the app is signed with a Developer ID and notarized.
+      # Without them it is signed ad-hoc and users have to allow it in System Settings.
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Set version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "XSHOT_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            echo "PACKAGE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "PACKAGE_VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+          echo "XSHOT_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Import signing certificate
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -base64 24)
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          [[ -n "$identity" ]] || { echo "::error::No Developer ID Application identity in MACOS_CERTIFICATE"; exit 1; }
+          echo "XSHOT_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: scripts/build.sh
+
+      - name: Notarize
+        if: env.MACOS_CERTIFICATE != '' && env.APPLE_ID != '' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          ditto -c -k --keepParent build/xShot.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple build/xShot.app
+
+      - name: Package
+        run: scripts/package.sh "$PACKAGE_VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xShot-${{ env.PACKAGE_VERSION }}
+          path: dist/*
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -n "$MACOS_CERTIFICATE" && -n "$APPLE_ID" ]]; then
+            notes="下载 dmg，把 xShot 拖进「应用程序」即可。"
+          else
+            notes=$'下载 dmg，把 xShot 拖进「应用程序」。\n\n此版本未经 Apple 公证，首次打开会被拦截：在「系统设置 › 隐私与安全性」里点「仍要打开」，或在终端运行：\n\n```\nxattr -dr com.apple.quarantine /Applications/xShot.app\n```\n\n每次更新后需要重新授予屏幕录制权限。'
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* --title "xShot $PACKAGE_VERSION" --notes "$notes" --generate-notes

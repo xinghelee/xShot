@@ -28,3 +28,21 @@ scripts/build.sh install   # install to /Applications and relaunch
 ```
 
 Requires `xcodegen`. Set `XSHOT_SIGN_IDENTITY` to a code-signing certificate name (see `security find-identity -v -p codesigning`) so the screen-recording permission survives rebuilds; without it the app is signed ad-hoc.
+
+## Releases
+
+GitHub Actions (`.github/workflows/build.yml`) builds every push and pull request; the dmg/zip are attached to the run as artifacts. Pushing a `v*` tag also publishes a GitHub Release:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Without signing secrets the release is signed ad-hoc, so macOS blocks the first launch (allow it under System Settings › Privacy & Security, or run `xattr -dr com.apple.quarantine /Applications/xShot.app`) and screen-recording permission has to be granted again after each update. To ship a signed, notarized build, add these repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE` | Developer ID Application certificate exported as .p12, base64-encoded |
+| `MACOS_CERTIFICATE_PASSWORD` | Password of the .p12 |
+| `APPLE_ID` | Apple ID used for notarization |
+| `APPLE_TEAM_ID` | Team ID |
+| `APPLE_APP_PASSWORD` | App-specific password for that Apple ID |

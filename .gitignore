@@ -1,3 +1,4 @@
 build/
 xShot.xcodeproj/
 .DS_Store
+dist/

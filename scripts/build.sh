@@ -9,15 +9,21 @@ cd "$(dirname "$0")/.."
 IDENTITY="${XSHOT_SIGN_IDENTITY:-}"
 
 xcodegen generate --quiet
+# XSHOT_VERSION / XSHOT_BUILD override the version in project.yml (set by CI for tagged releases).
+version_args=()
+[[ -n "${XSHOT_VERSION:-}" ]] && version_args+=(MARKETING_VERSION=$XSHOT_VERSION)
+[[ -n "${XSHOT_BUILD:-}" ]] && version_args+=(CURRENT_PROJECT_VERSION=$XSHOT_BUILD)
 xcodebuild -project xShot.xcodeproj -scheme xShot -configuration Release \
-  -derivedDataPath build/DerivedData build -quiet
+  -derivedDataPath build/DerivedData build -quiet "${version_args[@]}"
 
 rm -rf build/xShot.app
 cp -R build/DerivedData/Build/Products/Release/xShot.app build/xShot.app
 if [[ -n "$IDENTITY" ]]; then
   # Several certificates can share one name, so sign by SHA-1 when available.
   HASH=$(security find-identity -v -p codesigning | grep -F "$IDENTITY" | head -1 | awk '{print $2}')
-  codesign --force --deep --options runtime --entitlements xShot/xShot.entitlements --sign "${HASH:-$IDENTITY}" build/xShot.app
+  # Notarization needs a secure timestamp; only ask for one on CI so local builds work offline.
+  timestamp=(); [[ -n "${CI:-}" ]] && timestamp=(--timestamp)
+  codesign --force --deep --options runtime "${timestamp[@]}" --entitlements xShot/xShot.entitlements --sign "${HASH:-$IDENTITY}" build/xShot.app
 else
   echo "warning: XSHOT_SIGN_IDENTITY not set, signing ad-hoc (screen-recording permission resets on every rebuild)" >&2
   codesign --force --deep --options runtime --entitlements xShot/xShot.entitlements --sign - build/xShot.app
